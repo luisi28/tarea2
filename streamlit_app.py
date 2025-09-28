@@ -1,55 +1,62 @@
+# streamlit_app.py
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
-import pandas as pd
+import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="SQP Web Scraper", layout="wide")
+st.set_page_config(page_title="Revista SQP - Scraper", layout="wide")
 
-st.title("📚 Web Scraping - Revista Sociedad Química del Perú (SQP)")
+st.title("📚 Revista de la Sociedad Química del Perú")
+st.write("Aplicación para explorar artículos usando el protocolo **OAI-PMH** de la revista SQP.")
 
-# URL de archivo de números de la revista
-url = "https://revistas.sqp.org.pe/index.php/rsqp/issue/archive"
+# URL del endpoint OAI de la revista
+OAI_URL = "https://revistas.sqp.org.pe/index.php/sqp/oai"
 
-st.write("Extrayendo artículos de:", url)
+def get_records():
+    """Obtiene registros de artículos usando OAI-PMH (ListRecords)."""
+    params = {
+        "verb": "ListRecords",
+        "metadataPrefix": "oai_dc"
+    }
+    response = requests.get(OAI_URL, params=params, timeout=30)
+    if response.status_code != 200:
+        st.error("No se pudo conectar con el servidor OAI de la revista.")
+        return []
+    root = ET.fromstring(response.content)
 
-response = requests.get(url)
-if response.status_code == 200:
-    soup = BeautifulSoup(response.text, "html.parser")
+    ns = {
+        "oai": "http://www.openarchives.org/OAI/2.0/",
+        "dc": "http://purl.org/dc/elements/1.1/"
+    }
 
-    issues = soup.find_all("div", class_="obj_issue_summary")
+    records = []
+    for record in root.findall(".//oai:record", ns):
+        title = record.find(".//dc:title", ns)
+        creators = record.findall(".//dc:creator", ns)
+        description = record.find(".//dc:description", ns)
+        identifier = record.findall(".//dc:identifier", ns)
 
-    data = []
-    for issue in issues:
-        title = issue.find("h2").get_text(strip=True)
-        link = issue.find("a")["href"]
-        data.append({"Número/Volumen": title, "Enlace": link})
+        records.append({
+            "title": title.text if title is not None else "Sin título",
+            "authors": ", ".join([c.text for c in creators]) if creators else "Desconocidos",
+            "abstract": description.text if description is not None else "Sin resumen",
+            "link": identifier[-1].text if identifier else ""
+        })
 
-    df = pd.DataFrame(data)
-    st.dataframe(df)
+    return records
 
-    option = st.selectbox("Selecciona un número para ver artículos:", df["Número/Volumen"])
+st.subheader("Artículos disponibles")
 
-    if option:
-        link = df[df["Número/Volumen"] == option]["Enlace"].values[0]
-        st.write("📖 Cargando artículos de:", link)
+if st.button("📥 Cargar artículos"):
+    with st.spinner("Obteniendo artículos de la revista..."):
+        articles = get_records()
 
-        resp_issue = requests.get(link)
-        if resp_issue.status_code == 200:
-            soup_issue = BeautifulSoup(resp_issue.text, "html.parser")
-            articles = soup_issue.find_all("div", class_="obj_article_summary")
+    if articles:
+        for art in articles:
+            with st.expander(art["title"]):
+                st.write(f"👨‍🔬 **Autores:** {art['authors']}")
+                st.write(f"📝 **Resumen:** {art['abstract']}")
+                if art["link"]:
+                    st.markdown(f"[🔗 Enlace al artículo]({art['link']})")
+    else:
+        st.warning("No se encontraron artículos o no se pudo acceder al servidor.")
 
-            articles_data = []
-            for art in articles:
-                title = art.find("div", class_="title").get_text(strip=True)
-                authors = art.find("div", class_="authors").get_text(strip=True) if art.find("div", class_="authors") else "N/A"
-                link_article = art.find("a")["href"]
-                articles_data.append({
-                    "Título": title,
-                    "Autores": authors,
-                    "Link": link_article
-                })
-
-            df_articles = pd.DataFrame(articles_data)
-            st.dataframe(df_articles)
-else:
-    st.error("❌ No se pudo acceder a la página de la revista.")
